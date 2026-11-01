@@ -4,6 +4,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-15
@@ -34,3 +37,12 @@ jobs:
         with:
           name: DonAnh-ipa
           path: DonAnh.ipa
+
+      - name: Đăng lên Releases (bản mới nhất)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest DonAnh.ipa --title "Dọn Ảnh – bản mới nhất" \
+            --notes "Tải DonAnh.ipa rồi cài bằng Sideloadly. Xem hướng dẫn trong README." --latest
