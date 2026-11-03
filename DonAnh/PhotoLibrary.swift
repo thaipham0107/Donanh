@@ -64,6 +64,7 @@ final class PhotoLibrary: ObservableObject {
     @Published var groups: [DupGroup] = []
     @Published var videos: [Item] = []
     @Published var screenshots: [Item] = []
+    @Published var largest: [Item] = []      // toàn bộ ảnh + video, nặng nhất trước
     @Published var duplicateVideoIDs: Set<String> = []
     @Published var marked: Set<String> = []
     @Published var similarity: Similarity = .close {
@@ -71,6 +72,7 @@ final class PhotoLibrary: ObservableObject {
     }
 
     private var photos: [Item] = []
+    private var autoSuggested: Set<String> = []   // các mục app tự chọn sẵn (ảnh/video trùng)
     private var index: [String: Item] = [:]
 
     var markedBytes: Int64 {
@@ -130,8 +132,10 @@ final class PhotoLibrary: ObservableObject {
         screenshots = p
             .filter { $0.asset.mediaSubtypes.contains(.photoScreenshot) }
             .sorted { ($0.asset.creationDate ?? .distantPast) > ($1.asset.creationDate ?? .distantPast) }
+        largest = (p + v).sorted { $0.size > $1.size }
         index = Dictionary((p + v).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         marked = []
+        autoSuggested = []
 
         phase = .scanning(1, "Đang so sánh ảnh…")
         await regroup()
@@ -144,11 +148,13 @@ final class PhotoLibrary: ObservableObject {
             Grouper.run(photos: p, videos: v, sim: s)
         }.value
 
-        // Giữ lại các lựa chọn tay ở Video và Ảnh màn hình, đặt lại đề xuất cho ảnh trùng.
-        let keepManual = Set(videos.map(\.id)).union(screenshots.map(\.id))
-        var m = marked.filter { keepManual.contains($0) }
-        for g in result.groups { for it in g.items.dropFirst() { m.insert(it.id) } }
-        m.formUnion(result.dupVideos)
+        // Giữ lại các lựa chọn bạn tự chọn, chỉ làm mới các đề xuất tự động.
+        var m = marked.subtracting(autoSuggested)
+        var auto = Set<String>()
+        for g in result.groups { for it in g.items.dropFirst() { auto.insert(it.id) } }
+        auto.formUnion(result.dupVideos)
+        m.formUnion(auto)
+        autoSuggested = auto
 
         groups = result.groups
         duplicateVideoIDs = result.dupVideos
@@ -171,6 +177,7 @@ final class PhotoLibrary: ObservableObject {
         photos.removeAll { gone.contains($0.id) }
         videos.removeAll { gone.contains($0.id) }
         screenshots.removeAll { gone.contains($0.id) }
+        largest.removeAll { gone.contains($0.id) }
         for id in gone { index[id] = nil }
         marked = []
         await regroup()

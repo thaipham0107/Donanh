@@ -107,6 +107,8 @@ struct MainView: View {
             NavigationStack { DuplicatesView() }
                 .tabItem { Label("Ảnh trùng", systemImage: "square.on.square") }
                 .badge(lib.groups.count)
+            NavigationStack { LargestView() }
+                .tabItem { Label("Nặng nhất", systemImage: "arrow.down.circle") }
             NavigationStack { VideosView() }
                 .tabItem { Label("Video", systemImage: "video") }
             NavigationStack { ScreenshotsView() }
@@ -445,5 +447,167 @@ struct ScreenshotsView: View {
                 .disabled(ids.isEmpty)
             }
         }
+    }
+}
+
+// MARK: - Nặng nhất: toàn bộ ảnh và video, xếp theo dung lượng
+
+enum SizeFilter: String, CaseIterable, Identifiable {
+    case all = "Tất cả"
+    case photos = "Ảnh"
+    case videos = "Video"
+    var id: String { rawValue }
+}
+
+struct LargestView: View {
+    @EnvironmentObject var lib: PhotoLibrary
+    @State private var filter: SizeFilter = .all
+    @State private var preview: Item?
+    private let columns = [GridItem(.adaptive(minimum: 104), spacing: 6)]
+
+    private var items: [Item] {
+        switch filter {
+        case .all: return lib.largest
+        case .photos: return lib.largest.filter { $0.asset.mediaType == .image }
+        case .videos: return lib.largest.filter { $0.asset.mediaType == .video }
+        }
+    }
+
+    var body: some View {
+        let list = items
+        let total = list.reduce(Int64(0)) { $0 + $1.size }
+        let top50 = list.prefix(50).reduce(Int64(0)) { $0 + $1.size }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Picker("Loại", selection: $filter) {
+                    ForEach(SizeFilter.allCases) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("\(list.count) mục · tổng \(bytes(total))")
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                    if list.count > 50, total > 0 {
+                        Text("50 mục nặng nhất chiếm \(bytes(top50)) (\(Int(Double(top50) / Double(total) * 100))%).")
+                            .font(.footnote)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    Text("Chạm để chọn xoá. Nhấn giữ để xem ảnh lớn.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                LazyVGrid(columns: columns, spacing: 6) {
+                    ForEach(list) { item in
+                        SizeCell(item: item)
+                            .onLongPressGesture { preview = item }
+                    }
+                }
+            }
+            .padding()
+        }
+        .cleanerChrome("Nặng nhất")
+        .sheet(item: $preview) { PreviewSheet(item: $0) }
+    }
+}
+
+struct SizeCell: View {
+    @EnvironmentObject var lib: PhotoLibrary
+    let item: Item
+
+    var body: some View {
+        let del = lib.marked.contains(item.id)
+        let isVideo = item.asset.mediaType == .video
+        Button { lib.toggle(item.id) } label: {
+            Thumb(asset: item.asset)
+                .aspectRatio(1, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .opacity(del ? 0.55 : 1)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(del ? Color.red : Color.clear, lineWidth: 2.5)
+                }
+                .overlay(alignment: .bottomLeading) {
+                    HStack(spacing: 3) {
+                        if isVideo { Image(systemName: "video.fill") }
+                        Text(bytes(item.size)).monospacedDigit()
+                    }
+                    .font(.caption2.bold())
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 4))
+                    .padding(5)
+                }
+                .overlay(alignment: .topTrailing) {
+                    if del {
+                        Image(systemName: "trash.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white, .red)
+                            .padding(4)
+                    }
+                }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(item.name), \(bytes(item.size)), \(del ? "sẽ xoá" : "giữ")")
+    }
+}
+
+struct PreviewSheet: View {
+    @EnvironmentObject var lib: PhotoLibrary
+    @Environment(\.dismiss) private var dismiss
+    let item: Item
+    @State private var image: UIImage?
+
+    var body: some View {
+        let del = lib.marked.contains(item.id)
+        NavigationStack {
+            VStack(spacing: 16) {
+                Group {
+                    if let image {
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } else {
+                        ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                }
+                .frame(maxHeight: .infinity)
+
+                VStack(spacing: 4) {
+                    Text(item.name).font(.headline).lineLimit(1)
+                    Text(info)
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+
+                Button(role: del ? nil : .destructive) {
+                    lib.toggle(item.id)
+                    dismiss()
+                } label: {
+                    Label(del ? "Bỏ chọn xoá" : "Chọn để xoá", systemImage: del ? "arrow.uturn.backward" : "trash")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 4)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(del ? .gray : .red)
+            }
+            .padding()
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Đóng") { dismiss() } }
+            }
+        }
+        .task { image = await ThumbLoader.load(item.asset, side: 1200) }
+    }
+
+    private var info: String {
+        var parts = [bytes(item.size), "\(item.asset.pixelWidth)×\(item.asset.pixelHeight)"]
+        if item.asset.mediaType == .video {
+            let s = Int(item.asset.duration.rounded())
+            parts.append("\(s / 60):" + String(format: "%02d", s % 60))
+        }
+        if let d = item.asset.creationDate { parts.append(d.formatted(date: .abbreviated, time: .omitted)) }
+        return parts.joined(separator: " · ")
     }
 }
